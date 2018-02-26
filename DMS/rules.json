@@ -1,0 +1,56 @@
+{
+  "rules": [
+    {
+      "rule-type": "selection",
+      "rule-id": "1",
+      "rule-name": "1",
+      "object-locator": {
+        "schema-name": "payment",
+        "table-name": "bin"
+      },
+      "rule-action": "include"
+    },
+    {
+      "rule-type": "selection",
+      "rule-id": "2",
+      "rule-name": "2",
+      "object-locator": {
+        "schema-name": "payment",
+        "table-name": "card_holder"
+      },
+      "rule-action": "include"
+    },
+    {
+      "rule-type": "selection",
+      "rule-id": "3",
+      "rule-name": "3",
+      "object-locator": {
+        "schema-name": "payment",
+        "table-name": "decision_table"
+      },
+      "rule-action": "include"
+    },
+    {
+      "rule-type": "transformation",
+      "rule-id": "4",
+      "rule-name": "4",
+      "rule-action": "add-prefix",
+      "rule-target": "table",
+      "object-locator": {
+        "schema-name": "payment",
+        "table-name": "%"
+      },
+      "value": "piq_"
+    },{
+      "rule-type": "transformation",
+      "rule-id": "5",
+      "rule-name": "5",
+      "rule-action": "rename",
+      "rule-target": "schema",
+      "object-locator": {
+        "schema-name": "payment"
+      },
+      "value": "external_raw"
+    }
+  ]
+}

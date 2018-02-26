@@ -1,0 +1,185 @@
+{
+  "objects": [
+    {
+      "failureAndRerunMode": "CASCADE",
+      "resourceRole": "DataPipelineDefaultResourceRole",
+      "role": "DataPipelineDefaultRole",
+      "pipelineLogUri": "#{myPipelineLogUri}",
+      "scheduleType": "ondemand",
+      "name": "Default",
+      "id": "Default"
+    },
+    {
+      "directoryPath": "#{myS3StagingLoc}",
+      "name": "S3StagingDataNode",
+      "id": "S3StagingDataNode",
+      "type": "S3DataNode"
+    },
+    {
+      "connectionString": "#{myRedshiftJdbcConnectStr}",
+      "*password": "#{*myRedshiftPassword}",
+      "name": "RedshiftCluster",
+      "id": "RedshiftCluster",
+      "type": "RedshiftDatabase",
+      "username": "#{myRedshiftUsername}"
+    },
+    {
+      "id": "PaymentTransactionActivity",
+      "type": "EmrActivity",
+      "onFail": { "ref": "SlackAlarm" },
+      "workerGroup": "wg-emrcluster",
+      "step": "command-runner.jar,spark-submit,--deploy-mode,cluster,--class,es.madhava.PaymentTransactionApp,s3://prod.madhava.etl/data_payment_transaction.jar,#{format(minusDays(makeDate(myYearArg,myMonthArg,myDayOfMonthArg),1),'YYY-MM-dd')},#{format(plusDays(makeDate(myYearArg,myMonthArg,myDayOfMonthArg),1),'YYYY-MM-dd')}"
+    },
+    {
+      "scriptUri": "s3://prod.madhava.etl/payment_transactions/output_payment_transactions.sql",
+      "stage": "false",
+      "dependsOn": {
+        "ref": "PaymentTransactionActivity"
+      },
+      "name": "UnloadPaymentTxToS3Activity",
+      "workerGroup": "wg-emrcluster",
+      "onFail": {"ref": "SlackAlarm"},
+      "id": "UnloadPaymentTxToS3Activity",
+      "type": "HiveActivity",
+      "scriptVariable": [
+        "MY_TABLE=public.payment_transaction",
+        "STAGING_LOC=#{myS3StagingLoc}"
+      ]
+    },
+    {
+      "database": {
+        "ref": "RedshiftCluster"
+      },
+      "createTableSql": "#{myCreateTableSql}",
+      "name": "RedshiftTable",
+      "id": "RedshiftTable",
+      "schemaName": "#{myRedshiftSchema}",
+      "type": "RedshiftDataNode",
+      "tableName": "#{myRedshiftTableName}"
+    },
+    {
+      "output": {
+        "ref": "RedshiftTable"
+      },
+      "input": {
+        "ref": "S3StagingDataNode"
+      },
+      "onFail": {
+        "ref": "SlackAlarm"
+      },
+      "name": "S3ToRedshiftCopyActivity",
+      "id": "S3ToRedshiftCopyActivity",
+      "commandOptions": [
+        "ESCAPE",
+        "REMOVEQUOTES",
+        "TRUNCATECOLUMNS"
+      ],
+      "dependsOn": {
+        "ref": "UnloadPaymentTxToS3Activity"
+      },
+      "runsOn": {
+        "ref": "Ec2Instance"
+      },
+      "type": "RedshiftCopyActivity",
+      "insertMode": "#{myRedshiftInsertMode}"
+    },
+    {
+      "role": "DataPipelineDefaultRole",
+      "subject": "Activity Failed",
+      "name": "SlackAlarm",
+      "id": "SlackAlarm",
+      "message": "Data pipeline execution failed :: #{myPipelineName}",
+      "type": "SnsAlarm",
+      "topicArn": "#{mySlackArnTopic}"
+    },
+    {
+      "subnetId": "XXX",
+      "imageId": "XXX",
+      "instanceType": "t2.medium",
+      "name": "Ec2Instance",
+      "actionOnTaskFailure": "terminate",
+      "id": "Ec2Instance",
+      "type": "Ec2Resource",
+      "terminateAfter": "2 Hours"
+    }
+  ],
+  "parameters": [
+    {
+      "default": "TRUNCATE",
+      "helpLink": "https://docs.aws.amazon.com/console/datapipeline/redshiftcopyactivity",
+      "helpText": "Determines how to handle pre-existing data in the target table that overlaps with rows in the data to be loaded.",
+      "description": "Redshift table insert mode",
+      "id": "myRedshiftInsertMode",
+      "type": "String"
+    },
+    {
+      "description": "Pipeline name used for alerts and staging folder",
+      "id": "myPipelineName",
+      "type": "String",
+      "default": "Payment Transaction"
+    },
+    {
+      "default": "s3://prod.madhava.staging/payment_transaction/",
+      "helpText": "The S3 folder to store source table data before loading to Redshift. The S3 folder must be in the same region as the Redshift cluster.",
+      "description": "S3 staging folder",
+      "id": "myS3StagingLoc",
+      "type": "AWS::S3::ObjectKey"
+    },
+    {
+      "default": "public",
+      "watermark": "public",
+      "description": "Redshift schema",
+      "id": "myRedshiftSchema",
+      "type": "String"
+    },
+    {
+      "default": "public",
+      "description": "Redshift username",
+      "id": "myRedshiftUsername",
+      "type": "String"
+    },
+    {
+      "default": "payment_transaction",
+      "watermark": "payment_transaction",
+      "description": "Redshift table name",
+      "id": "myRedshiftTableName",
+      "type": "String"
+    },
+    {
+      "description": "Redshift password",
+      "id": "*myRedshiftPassword",
+      "type": "String",
+      "default": ""
+    },
+    {
+      "default": "s3://prod.madhava.logs/datapipeline",
+      "description": "Location in S3 where pipeline logs will be stored",
+      "id": "myPipelineLogUri",
+      "type": "AWS::S3::ObjectKey"
+    },
+    {
+      "watermark": "CREATE TABLE IF NOT EXISTS public.transaction_entry(id VARCHAR(255) NOT NULL,...",
+      "description": "Create table SQL",
+      "id": "myCreateTableSql",
+      "type": "String"
+    },
+    {
+      "description": "Arn topic to send alerts to Slack",
+      "id": "mySlackArnTopic",
+      "type": "String",
+      "default": "arn:aws:sns:eu-west-1:XXX"
+    },
+    {
+      "default": "jdbc:postgresql://madhava.cloud:5439/warehouse",
+      "watermark": "jdbc:postgresql://endpoint:port/database?tcpKeepAlive=true",
+      "description": "Redshift JDBC connection string",
+      "id": "myRedshiftJdbcConnectStr",
+      "type": "String"
+    }
+  ],
+  "values": {
+    "myYearArg": "0",
+    "myMonthArg": "0",
+    "myDayOfMonthArg": "0"
+  }
+}

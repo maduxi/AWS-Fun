@@ -1,0 +1,158 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Long running EMR cluster
+Parameters:
+  ReleaseLabelEMR:
+    Description: Label version which defines which platform are available on EMR
+    Type: String
+    Default: emr-5.11.0
+    AllowedValues:
+      - emr-5.11.0
+  KeyName:
+    Description: The EC2 Key Pair to allow SSH access to the instances
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    Default: XXXX
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+Resources:
+  LongRunningEMRCluster:
+    Type: 'AWS::EMR::Cluster'
+    Properties:
+      Instances:
+        Ec2KeyName: !Ref KeyName
+        Ec2SubnetId: !ImportValue XXXX
+        MasterInstanceGroup:
+          InstanceCount: 1
+          InstanceType: m4.xlarge
+          Market: ON_DEMAND
+          Name: MasterNode
+        CoreInstanceGroup:
+          InstanceCount: 2
+          InstanceType: r4.xlarge
+          Market: ON_DEMAND
+          Name: CoreNodes
+      ScaleDownBehavior: TERMINATE_AT_TASK_COMPLETION
+      AutoScalingRole: EMR_AutoScaling_DefaultRole
+      Applications:
+        - Name: Spark
+        - Name: Hadoop
+        - Name: Hive
+        - Name: Hue
+        - Name: Presto
+        - Name: Ganglia
+        - Name: Zeppelin
+        - Name: Zookeeper
+      JobFlowRole: EMR_EC2_DefaultRole
+      LogUri: !Join
+        - ''
+        - - 's3://'
+          - !ImportValue ApplicationLogsBucket
+          - /emr/logs
+      Name: LongRunningCluster
+      ReleaseLabel: !Ref ReleaseLabelEMR
+      ServiceRole: EMR_DefaultRole
+      Tags:
+        - Key: Name
+          Value: long-running-emr-cluster
+      VisibleToAllUsers: 'true'
+      BootstrapActions:
+        - Name: Install python libs
+          ScriptBootstrapAction:
+            Path: 's3://XXXX/pip-bootstrap.sh'
+      Configurations:
+        - Classification: hive-site
+          ConfigurationProperties:
+            javax.jdo.option.ConnectionUserName: XXX
+            javax.jdo.option.ConnectionPassword: !ImportValue HiveDBPassword
+            javax.jdo.option.ConnectionURL: !Join
+              - ''
+              - - 'jdbc:mysql://'
+                - !ImportValue HiveDatabaseAddress
+                - ':3306/hive?createDatabaseIfNotExist=true'
+  AutoscalingTaskGroup:
+    Type: 'AWS::EMR::InstanceGroupConfig'
+    Properties:
+      AutoScalingPolicy:
+        Constraints:
+          MaxCapacity: 50
+          MinCapacity: 0
+        Rules:
+          - Action:
+              SimpleScalingPolicyConfiguration:
+                CoolDown: 120
+                ScalingAdjustment: 5
+            Name: LowYarnCapacity
+            Trigger:
+              CloudWatchAlarmDefinition:
+                ComparisonOperator: LESS_THAN_OR_EQUAL
+                Dimensions:
+                  - Key: JobFlowId
+                    Value: !Ref LongRunningEMRCluster
+                MetricName: YARNMemoryAvailablePercentage
+                Period: 300
+                Threshold: 15
+                Unit: PERCENT
+          - Action:
+              SimpleScalingPolicyConfiguration:
+                CoolDown: 300
+                ScalingAdjustment: -3
+            Name: FreeYarnMemory
+            Trigger:
+              CloudWatchAlarmDefinition:
+                ComparisonOperator: GREATER_THAN_OR_EQUAL
+                Dimensions:
+                  - Key: JobFlowId
+                    Value: !Ref LongRunningEMRCluster
+                MetricName: YARNMemoryAvailablePercentage
+                Period: 300
+                Threshold: 35
+                Unit: PERCENT
+      BidPrice: '0.2'
+      InstanceCount: 0
+      InstanceRole: TASK
+      InstanceType: r3.xlarge
+      JobFlowId: !Ref LongRunningEMRCluster
+      Market: SPOT
+      Name: TaskNodes
+  InstallTaskrunner:
+    Type: 'AWS::EMR::Step'
+    Properties:
+      ActionOnFailure: CONTINUE
+      JobFlowId: !Ref LongRunningEMRCluster
+      Name: Install TaskRunner
+      HadoopJarStep:
+        Args:
+          - >-
+            s3://datapipeline-eu-west-1/eu-west-1/bootstrap-actions/latest/TaskRunner/install-remote-runner-v2
+          - '--workerGroup=wg-emrcluster'
+          - '--endpoint=https://datapipeline.eu-west-1.amazonaws.com'
+          - '--region=eu-west-1'
+          - !Join
+            - ''
+            - - '--logUri=s3://'
+              - !ImportValue DataPipelineStagingBucket
+              - /worker-group/wg-emrcluster
+          - >-
+            --zipFile=http://datapipeline-eu-west-1.s3.amazonaws.com/eu-west-1/software/latest/TaskRunner/TaskRunner-1.0.zip
+          - >-
+            --mysqlFile=http://datapipeline-eu-west-1.s3.amazonaws.com/eu-west-1/software/latest/TaskRunner/mysql-connector-java-bin.jar
+          - >-
+            --hiveCsvSerdeFile=http://datapipeline-eu-west-1.s3.amazonaws.com/eu-west-1/software/latest/TaskRunner/csv-serde.jar
+          - !Join
+            - =
+            - - '--releaseLabel'
+              - !Ref ReleaseLabelEMR
+          - >-
+            --jdbcDriverS3Path=s3://datapipeline-eu-west-1/eu-west-1/software/latest/TaskRunner/
+          - '--s3NoProxy=false'
+        Jar: 's3://eu-west-1.elasticmapreduce/libs/script-runner/script-runner.jar'
+      JobFlowId: !Ref LongRunningEMRCluster
+  masterDNSRecord:
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      HostedZoneName: !Join ['', [!ImportValue XXXX, '.']]
+      Comment: DNS name for EMR long running cluster master.
+      Name: CCCC
+      Type: CNAME
+      TTL: '300'
+      ResourceRecords:
+        - !GetAtt LongRunningEMRCluster.MasterPublicDNS
+Outputs: {}
